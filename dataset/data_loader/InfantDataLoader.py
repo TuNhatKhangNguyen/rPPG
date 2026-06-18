@@ -66,7 +66,7 @@ class InfantDataLoader(BaseLoader):
     def read_pulse_wave(self, participant_id):
         """Reads the tab-separated .txt pulse wave label, keeping only the first column."""
         label_path = os.path.join(self.label_data_path, f"{participant_id}.txt")
-        pulse_wave = np.loadtxt(label_path, delimiter='\t', usecols=0) 
+        pulse_wave = np.loadtxt(label_path, delimiter='\t', usecols=1) 
         return pulse_wave
 
     def preprocess_dataset_subprocess(self, data_dirs, config_preprocess, i, file_list_dict):
