@@ -3,7 +3,7 @@ import glob
 import cv2
 import numpy as np
 import pandas as pd
-from dataset.data_loader import BaseLoader
+from dataset.data_loader.BaseLoader import BaseLoader
 
 class InfantDataLoader(BaseLoader):
     """
