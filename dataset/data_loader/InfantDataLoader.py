@@ -118,3 +118,55 @@ class InfantDataLoader(BaseLoader):
         # BaseLoader saves files as: {participant_id}_input{chunk_id}.npy
         # We split the filename to grab just the participant ID
         return [os.path.basename(inp).split('_')[0] for inp in self.inputs]
+    
+    def __getitem__(self, index):
+        """
+        Returns a clip of video and its corresponding signals, applying 
+        the scaling/normalization specified in config_data on the fly.
+        """
+        data = np.load(self.inputs[index])
+        label = np.load(self.labels[index])
+
+        scaled_data_list = []
+        for data_type in self.config_data.PREPROCESS.DATA_TYPE:
+            f_c = data.copy()
+            if data_type == "Raw":
+                scaled_data_list.append(f_c)
+            elif data_type == "DiffNormalized":
+                scaled_data_list.append(BaseLoader.diff_normalize_data(f_c))
+            elif data_type == "Standardized":
+                scaled_data_list.append(BaseLoader.standardized_data(f_c))
+            else:
+                raise ValueError(f"Unsupported dynamic data scaling type: {data_type}")
+        
+        data = np.concatenate(scaled_data_list, axis=-1)
+
+        label_type = self.config_data.PREPROCESS.LABEL_TYPE
+        if label_type == "Raw":
+            pass
+        elif label_type == "DiffNormalized":
+            label = BaseLoader.diff_normalize_label(label)
+        elif label_type == "Standardized":
+            label = BaseLoader.standardized_label(label)
+        else:
+            raise ValueError(f"Unsupported dynamic label scaling type: {label_type}")
+
+        if self.data_format == 'NDCHW':
+            data = np.transpose(data, (0, 3, 1, 2))
+        elif self.data_format == 'NCDHW':
+            data = np.transpose(data, (3, 0, 1, 2))
+        elif self.data_format == 'NDHWC':
+            pass
+        else:
+            raise ValueError('Unsupported Data Format!')
+            
+        data = np.float32(data)
+        label = np.float32(label)
+        
+        item_path = self.inputs[index]
+        item_path_filename = item_path.split(os.sep)[-1]
+        split_idx = item_path_filename.rindex('_')
+        filename = item_path_filename[:split_idx]
+        chunk_id = item_path_filename[split_idx + 6:].split('.')[0]
+        
+        return data, label, filename, chunk_id
