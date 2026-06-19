@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from dataset.data_loader.BaseLoader import BaseLoader
 from tqdm import tqdm
+import csv
 
 class InfantDataLoader(BaseLoader):
     """
@@ -14,6 +15,15 @@ class InfantDataLoader(BaseLoader):
     def __init__(self, dataset_name, raw_data_path, label_data_path, config_data, device=None):
         self.label_data_path = label_data_path
         super().__init__(dataset_name, raw_data_path, config_data, device)
+        self.stats_csv_path = self.config_data.STATS_CSV.PATH
+        self.stats_available = self.config_data.STATS_CSV.AVAILABLE
+        self.participant_stats = {}
+
+        if self.do_preprocess or not self.stats_available:
+            print("Generating participant-wise statistics...")
+            self.generate_participant_stats()
+        
+        self.load_participant_stats()
 
     def get_raw_data(self, raw_data_path):
         """
@@ -137,6 +147,162 @@ class InfantDataLoader(BaseLoader):
 
         return file_list_dict
     
+    def generate_participant_stats(self):
+        """
+        Iterates through raw chunks to calculate global mean/std for Standardized mode,
+        and the global standard deviation of differences for DiffNormalized mode.
+        """
+        raw_stats = {}
+        
+        # Step 1: Accumulate raw properties and temporal differences
+        for input_path in self.inputs:
+            filename = os.path.basename(input_path)
+            participant_id = filename.split('_')[0]
+            
+            data = np.load(input_path)
+            label_path = input_path.replace("input", "label")
+            label = np.load(label_path)
+            
+            if participant_id not in raw_stats:
+                raw_stats[participant_id] = {
+                    'data_sum': 0.0, 'data_sq_sum': 0.0, 'data_count': 0,
+                    'label_sum': 0.0, 'label_sq_sum': 0.0, 'label_count': 0,
+                    # Accumulators for temporal difference variations
+                    'diff_data_sq_sum': 0.0, 'diff_data_count': 0,
+                    'diff_label_sq_sum': 0.0, 'diff_label_count': 0
+                }
+            
+            # Standard metrics accumulation
+            raw_stats[participant_id]['data_sum'] += np.sum(data)
+            raw_stats[participant_id]['data_sq_sum'] += np.sum(np.square(data))
+            raw_stats[participant_id]['data_count'] += data.size
+            
+            raw_stats[participant_id]['label_sum'] += np.sum(label)
+            raw_stats[participant_id]['label_sq_sum'] += np.sum(np.square(label))
+            raw_stats[participant_id]['label_count'] += label.size
+
+            # Diff metrics calculation (replicating BaseLoader math formulas)
+            # Data diff formula: (next - curr) / (next + curr + 1e-7)
+            if data.shape[0] > 1:
+                diff_data = (data[1:] - data[:-1]) / (data[1:] + data[:-1] + 1e-7)
+                raw_stats[participant_id]['diff_data_sq_sum'] += np.sum(np.square(diff_data))
+                raw_stats[participant_id]['diff_data_count'] += diff_data.size
+
+            # Label diff formula: np.diff(label)
+            if label.shape[0] > 1:
+                diff_label = np.diff(label, axis=0)
+                raw_stats[participant_id]['diff_label_sq_sum'] += np.sum(np.square(diff_label))
+                raw_stats[participant_id]['diff_label_count'] += diff_label.size
+
+        # Step 2: Finalize calculations and output CSV
+        os.makedirs(os.path.dirname(self.stats_csv_path), exist_ok=True)
+        with open(self.stats_csv_path, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'participant_id', 
+                'data_mean', 'data_std', 'diff_data_std',
+                'label_mean', 'label_std', 'diff_label_std'
+            ])
+            
+            for pid, stats in raw_stats.items():
+                # Standard calculations
+                d_mean = stats['data_sum'] / stats['data_count']
+                d_std = np.sqrt(max((stats['data_sq_sum'] / stats['data_count']) - np.square(d_mean), 1e-7))
+                
+                l_mean = stats['label_sum'] / stats['label_count']
+                l_std = np.sqrt(max((stats['label_sq_sum'] / stats['label_count']) - np.square(l_mean), 1e-7))
+                
+                # Diff calculations (Mean of differences is assumed centered around 0 in standard pipelines)
+                diff_d_std = np.sqrt(max(stats['diff_data_sq_sum'] / stats['diff_data_count'], 1e-7))
+                diff_l_std = np.sqrt(max(stats['diff_label_sq_sum'] / stats['diff_label_count'], 1e-7))
+                
+                writer.writerow([pid, d_mean, d_std, diff_d_std, l_mean, l_std, diff_l_std])
+                
+        print(f"Participant metrics successfully written to: {self.stats_csv_path}")
+
+    def load_participant_stats(self):
+        df = pd.read_csv(self.stats_csv_path)
+        for _, row in df.iterrows():
+            self.participant_stats[str(row['participant_id'])] = {
+                'data_mean': row['data_mean'], 'data_std': row['data_std'], 'diff_data_std': row['diff_data_std'],
+                'label_mean': row['label_mean'], 'label_std': row['label_std'], 'diff_label_std': row['diff_label_std']
+            }
+
+    def __getitem__(self, index):
+        data = np.load(self.inputs[index])
+        label = np.load(self.labels[index])
+        
+        item_path = self.inputs[index]
+        item_path_filename = item_path.split(os.sep)[-1]
+        participant_id = item_path_filename.split('_')[0]
+        
+        stats = self.participant_stats[participant_id]
+
+        # 2. Dynamic Video Data Scaling
+        scaled_data_list = []
+        for data_type in self.config_data.PREPROCESS.DATA_TYPE:
+            f_c = data.copy()
+            if data_type == "Raw":
+                scaled_data_list.append(f_c)
+                
+            elif data_type == "Standardized":
+                standardized = (f_c - stats['data_mean']) / stats['data_std']
+                standardized[np.isnan(standardized)] = 0
+                scaled_data_list.append(standardized)
+                
+            elif data_type == "DiffNormalized":
+                n, h, w, c = f_c.shape
+                
+                # Vectorized calculation using NumPy slicing
+                diff_data = (f_c[1:] - f_c[:-1]) / (f_c[1:] + f_c[:-1] + 1e-7)
+                
+                # Normalize via full-video diff standard deviation profile mapping
+                diff_data = diff_data / stats['diff_data_std']
+                
+                # Pad with a single zero-frame at the end to keep chunk shapes aligned (N frames)
+                diff_data = np.append(diff_data, np.zeros((1, h, w, c), dtype=np.float32), axis=0)
+                diff_data[np.isnan(diff_data)] = 0
+                scaled_data_list.append(diff_data)
+                
+            else:
+                raise ValueError(f"Unsupported dynamic data scaling type: {data_type}")
+        data = np.concatenate(scaled_data_list, axis=-1)
+
+        # 3. Dynamic Label Signal Scaling
+        label_type = self.config_data.PREPROCESS.LABEL_TYPE
+        if label_type == "Raw":
+            pass
+            
+        elif label_type == "Standardized":
+            label = (label - stats['label_mean']) / stats['label_std']
+            label[np.isnan(label)] = 0
+            
+        elif label_type == "DiffNormalized":
+            diff_label = np.diff(label, axis=0)
+            # Normalize via full-video diff standard deviation profile mapping
+            diff_label = diff_label / stats['diff_label_std']
+            # Pad to keep chunk shapes aligned
+            label = np.append(diff_label, np.zeros(1), axis=0)
+            label[np.isnan(label)] = 0
+            
+        else:
+            raise ValueError(f"Unsupported dynamic label scaling type: {label_type}")
+
+        # 4. Dimension transpositions
+        if self.data_format == 'NDCHW':
+            data = np.transpose(data, (0, 3, 1, 2))
+        elif self.data_format == 'NCDHW':
+            data = np.transpose(data, (3, 0, 1, 2))
+            
+        data = np.float32(data)
+        label = np.float32(label)
+        
+        split_idx = item_path_filename.rindex('_')
+        filename = item_path_filename[:split_idx]
+        chunk_id = item_path_filename[split_idx + 6:].split('.')[0]
+        
+        return data, label, filename, chunk_id
+    
     @property
     def groups(self):
         """
@@ -146,55 +312,3 @@ class InfantDataLoader(BaseLoader):
         # BaseLoader saves files as: {participant_id}_input{chunk_id}.npy
         # We split the filename to grab just the participant ID
         return [os.path.basename(inp).split('_')[0] for inp in self.inputs]
-    
-    def __getitem__(self, index):
-        """
-        Returns a clip of video and its corresponding signals, applying 
-        the scaling/normalization specified in config_data on the fly.
-        """
-        data = np.load(self.inputs[index])
-        label = np.load(self.labels[index])
-
-        scaled_data_list = []
-        for data_type in self.config_data.PREPROCESS.DATA_TYPE:
-            f_c = data.copy()
-            if data_type == "Raw":
-                scaled_data_list.append(f_c)
-            elif data_type == "DiffNormalized":
-                scaled_data_list.append(BaseLoader.diff_normalize_data(f_c))
-            elif data_type == "Standardized":
-                scaled_data_list.append(BaseLoader.standardized_data(f_c))
-            else:
-                raise ValueError(f"Unsupported dynamic data scaling type: {data_type}")
-        
-        data = np.concatenate(scaled_data_list, axis=-1)
-
-        label_type = self.config_data.PREPROCESS.LABEL_TYPE
-        if label_type == "Raw":
-            pass
-        elif label_type == "DiffNormalized":
-            label = BaseLoader.diff_normalize_label(label)
-        elif label_type == "Standardized":
-            label = BaseLoader.standardized_label(label)
-        else:
-            raise ValueError(f"Unsupported dynamic label scaling type: {label_type}")
-
-        if self.data_format == 'NDCHW':
-            data = np.transpose(data, (0, 3, 1, 2))
-        elif self.data_format == 'NCDHW':
-            data = np.transpose(data, (3, 0, 1, 2))
-        elif self.data_format == 'NDHWC':
-            pass
-        else:
-            raise ValueError('Unsupported Data Format!')
-            
-        data = np.float32(data)
-        label = np.float32(label)
-        
-        item_path = self.inputs[index]
-        item_path_filename = item_path.split(os.sep)[-1]
-        split_idx = item_path_filename.rindex('_')
-        filename = item_path_filename[:split_idx]
-        chunk_id = item_path_filename[split_idx + 6:].split('.')[0]
-        
-        return data, label, filename, chunk_id
