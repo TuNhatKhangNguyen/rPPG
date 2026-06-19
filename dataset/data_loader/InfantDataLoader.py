@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pandas as pd
 from dataset.data_loader.BaseLoader import BaseLoader
+from tqdm import tqdm
 
 class InfantDataLoader(BaseLoader):
     """
@@ -109,6 +110,33 @@ class InfantDataLoader(BaseLoader):
         self.labels = [inp.replace("input", "label") for inp in self.inputs]
         self.preprocessed_data_len = len(self.inputs)
 
+    def multi_process_manager(self, data_dirs, config_preprocess):
+        """Allocate dataset preprocessing sequentially.
+
+        Args:
+            data_dirs(List[str]): a list of video_files.
+            config_preprocess(Dict): a dictionary of preprocessing configurations
+        Returns:
+            file_list_dict(Dict): Dictionary containing information regarding processed data ( path names)
+        """
+        print('Preprocessing dataset...')
+        file_num = len(data_dirs)
+
+        # Standard standard Python dictionary instead of mp.Manager().dict()
+        file_list_dict = {}
+
+        # Iterate sequentially with a simplified tqdm progress bar
+        for i in tqdm(range(file_num)):
+            # Call the preprocessing function directly in the main thread
+            self.preprocess_dataset_subprocess(
+                data_dirs, 
+                config_preprocess, 
+                i, 
+                file_list_dict
+            )
+
+        return file_list_dict
+    
     @property
     def groups(self):
         """
