@@ -221,7 +221,7 @@ class InfantDataLoader(BaseLoader):
         print(f"Participant metrics successfully written to: {self.stats_csv_path}")
 
     def load_participant_stats(self):
-        df = pd.read_csv(self.stats_csv_path)
+        df = pd.read_csv(self.stats_csv_path, dtype={'participant_id': str})
         for _, row in df.iterrows():
             self.participant_stats[str(row['participant_id'])] = {
                 'data_mean': row['data_mean'], 'data_std': row['data_std'], 'diff_data_std': row['diff_data_std'],
