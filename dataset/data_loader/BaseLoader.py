@@ -539,7 +539,7 @@ class BaseLoader(Dataset):
 
         file_list_df = pd.DataFrame(file_list, columns=['input_files'])
         os.makedirs(os.path.dirname(self.file_list_path), exist_ok=True)
-        file_list_df.to_csv(self.file_list_path)  # save file list to .csv
+        file_list_df.to_csv(self.file_list_path, index=False)  # save file list to .csv
 
     def build_file_list_retroactive(self, data_dirs, begin, end):
         """ If a file list has not already been generated for a specific data split build a list of files 
@@ -575,7 +575,7 @@ class BaseLoader(Dataset):
 
         file_list_df = pd.DataFrame(file_list, columns=['input_files'])
         os.makedirs(os.path.dirname(self.file_list_path), exist_ok=True)
-        file_list_df.to_csv(self.file_list_path)  # save file list to .csv
+        file_list_df.to_csv(self.file_list_path, index=False)  # save file list to .csv
 
     def load_preprocessed_data(self):
         """ Loads the preprocessed data listed in the file list.
