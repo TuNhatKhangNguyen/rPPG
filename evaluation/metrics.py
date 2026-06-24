@@ -382,7 +382,7 @@ def calculate_metrics(predictions, labels, config, filename_id="video", ba=False
                 
         # Explicit Bland-Altman Execution Block
         if ba:
-            compare = BlandAltman(gt_hr_peak_all, predict_hr_peak_all, config)
+            compare = BlandAltman(gt_hr_peak_all, predict_hr_peak_all, config, averaged=True)
             compare.scatter_plot(
                 x_label='GT PPG HR [bpm]',
                 y_label='rPPG HR [bpm]',
