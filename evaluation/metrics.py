@@ -235,7 +235,7 @@ def calculate_metrics(predictions, labels, config, filename_id="video", ba=False
 
         video_frame_size = prediction.shape[0]
         if config.INFERENCE.EVALUATION_WINDOW.USE_SMALLER_WINDOW:
-            window_frame_size = config.INFERENCE.EVALUATION_WINDOW.WINDOW_SIZE * config.TEST.DATA.FS
+            window_frame_size = int(config.INFERENCE.EVALUATION_WINDOW.WINDOW_SIZE * config.TEST.DATA.FS)
             if window_frame_size > video_frame_size:
                 window_frame_size = video_frame_size
         else:
@@ -382,7 +382,7 @@ def calculate_metrics(predictions, labels, config, filename_id="video", ba=False
                 
         # Explicit Bland-Altman Execution Block
         if ba:
-            compare = BlandAltman(gt_hr_peak_all, predict_hr_peak_all, config)
+            compare = BlandAltman(gt_hr_peak_all, predict_hr_peak_all, config, averaged=True)
             compare.scatter_plot(
                 x_label='GT PPG HR [bpm]',
                 y_label='rPPG HR [bpm]',
